@@ -51,22 +51,20 @@ function ArtistsCtrl($scope, $http) {
 
 	$scope.getArtists = function(artist) {
 		addedBands = [artist];
-		search(artist, $scope.depth, {artistName: artist, depth: $scope.depth + 7, nodes: []}, addedBands, initializeGraph);
+		search(artist, $scope.depth, {artistName: artist, depth: $scope.depth, nodes: []}, addedBands).then(function(node) {
+			initializeGraph(node);
+		});
 	};
 
-	search = function(artist, depth, parent, addedBands, callback) {
-		var artists = [];
+	search = function(artist, depth, parent, addedBands) {
+		var deferred = $.Deferred();
 		if (depth >= 1) {
 			var encodedArtist = encodeURIComponent(artist);
 			var encodedApiKey = encodeURIComponent('c6f5ad25b6120e5e42f312f4b6ebf4ad');
 			var request = 'http://ws.audioscrobbler.com/2.0/?method=artist.getsimilar&artist=' + encodedArtist + '&api_key=' + encodedApiKey + '&format=json&autocorrect=1';
-			$http.get(request).success(function(data) {
-				var response = JSON.stringify(data);
-				if (data.similarartists) {
-					artists = data.similarartists.artist;
-				} else {
-					artists = [];
-				}
+			$http.get(request).then(function(data) {
+				var artists = data.data.similarartists ? data.data.similarartists.artist : [];
+
 				if (artists instanceof Array) {
 					artists = artists.filter(function(item) {
 						return addedBands.indexOf(item.name) == -1;
@@ -74,10 +72,8 @@ function ArtistsCtrl($scope, $http) {
 					if (artists.length > getLimit()) {
 						artists = artists.slice(0, getLimit());
 					}
-					var pendingChildren = artists.length;
-					if (pendingChildren == 0) {
-						callback();
-					}
+					
+					var searchPromises = [];
 					for(var i = 0 ; i < artists.length ; i++) {
 						artistJson = artists[i];
 						var newNode = {
@@ -89,22 +85,21 @@ function ArtistsCtrl($scope, $http) {
 						parent.nodes.push(newNode);
 						if (addedBands.indexOf(newNode.artistName) == -1) {
 							addedBands.push(newNode.artistName);
-							search(newNode.artistName, depth - 1, newNode, addedBands, function() {
-								pendingChildren--;
-								if(pendingChildren == 0) {
-									callback(parent);
-								}
-							});
+							searchPromises.push(search(newNode.artistName, depth - 1, newNode, addedBands));
 						}
 					}
-				} else {
-					callback();
-					return;
+
+					($.when.apply($, searchPromises)).always(function() {
+						deferred.resolve(parent);
+					});
 				}
+			}, function(error) {
+				deferred.reject(parent);
 			});
 		} else {
-			callback();
+			deferred.resolve(parent);
 		}
+		return deferred.promise();
 	};
 	
 	initializeGraph = function(artistNode) {
@@ -120,7 +115,11 @@ function ArtistsCtrl($scope, $http) {
 				});
 		} else {
 			graphInstance.emptyGraph();
+			//graphInstance.refresh();
 		}
+
+		//We sum 7 to the depth of the parent node in order to make bigger than the others.
+		artistNode.depth += 7;
 		populateGraph(graphInstance, artistNode, null, []);
 		graphInstance.startForceAtlas2();
 		graphInstance.draw();
